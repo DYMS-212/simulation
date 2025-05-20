@@ -16,11 +16,17 @@ import logging
 from contextlib import redirect_stdout
 
 # 在模块级别设置日志抑制
-logging.getLogger('qiskit.algorithms.minimum_eigensolvers.vqe').setLevel(logging.ERROR)
-logging.getLogger('qiskit.algorithms.optimizers').setLevel(logging.ERROR)
+logging.getLogger('qiskit_algorithms.minimum_eigensolvers.vqe').setLevel(logging.ERROR)
+logging.getLogger('qiskit_algorithms.optimizers').setLevel(logging.ERROR)
+logging.getLogger("qiskit_algorithms").setLevel(logging.ERROR)
 logging.getLogger('qiskit.primitives').setLevel(logging.ERROR)
 logging.getLogger('qiskit.algorithms').setLevel(logging.ERROR)
 logging.getLogger('qiskit').setLevel(logging.ERROR)
+class SuppressOptimalPointFilter(logging.Filter):
+    def filter(self, record):
+        return 'Found optimal point' not in record.getMessage()
+
+logging.getLogger().addFilter(SuppressOptimalPointFilter())
 
 class VQEEnergyLabeler:
     def __init__(self, 
