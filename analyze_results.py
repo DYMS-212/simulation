@@ -1,7 +1,4 @@
-# 更新analyze_results.py以显示更多能量相关信息
 
-#!/usr/bin/env python
-# analyze_results.py - 用于分析和导出量子回路计算结果
 
 import os
 import pickle

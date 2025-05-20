@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# 全面修复VQEEnergyLabeler以抑制"Found optimal point"消息
+# 全面修复VQEEnergyLabeler以抑制"Found optimal point"消息和优化参数输出
 
 import os
 import pickle
@@ -16,9 +16,11 @@ import logging
 from contextlib import redirect_stdout
 
 # 在模块级别设置日志抑制
-# 这里我们只暂时降低级别，在函数内部我们会在需要时进一步控制
-logging.getLogger('qiskit.algorithms.minimum_eigensolvers.vqe').setLevel(logging.WARNING)
-logging.getLogger('qiskit.algorithms.optimizers').setLevel(logging.WARNING)
+logging.getLogger('qiskit.algorithms.minimum_eigensolvers.vqe').setLevel(logging.ERROR)
+logging.getLogger('qiskit.algorithms.optimizers').setLevel(logging.ERROR)
+logging.getLogger('qiskit.primitives').setLevel(logging.ERROR)
+logging.getLogger('qiskit.algorithms').setLevel(logging.ERROR)
+logging.getLogger('qiskit').setLevel(logging.ERROR)
 
 class VQEEnergyLabeler:
     def __init__(self, 
@@ -73,17 +75,21 @@ class VQEEnergyLabeler:
             
     def _configure_logging(self):
         """配置日志级别以控制VQE输出"""
-        if not self.verbose:
-            # 如果不是详细模式，将VQE相关日志设为ERROR级别以抑制大部分消息
-            logging.getLogger('qiskit.algorithms.minimum_eigensolvers.vqe').setLevel(logging.ERROR)
+        # 完全禁用所有VQE相关的日志输出
+        logging.getLogger('qiskit.algorithms').setLevel(logging.CRITICAL)
+        logging.getLogger('qiskit.primitives').setLevel(logging.CRITICAL)
+        logging.getLogger('qiskit').setLevel(logging.ERROR)
+        logging.getLogger('qiskit.algorithms.minimum_eigensolvers.vqe').setLevel(logging.CRITICAL)
+        logging.getLogger('qiskit.algorithms.optimizers').setLevel(logging.CRITICAL)
+        
+        # 仅在极其详细的模式下才允许部分日志
+        if self.verbose:
+            # 即使在verbose模式下也不允许显示优化参数
             logging.getLogger('qiskit.algorithms.optimizers').setLevel(logging.ERROR)
-            # 抑制其他可能的消息源
-            logging.getLogger('qiskit.primitives').setLevel(logging.ERROR)
-        else:
-            # 如果是详细模式，将日志级别设为INFO以显示更多信息
-            logging.getLogger('qiskit.algorithms.minimum_eigensolvers.vqe').setLevel(logging.INFO)
-            logging.getLogger('qiskit.algorithms.optimizers').setLevel(logging.INFO) 
-            logging.getLogger('qiskit.primitives').setLevel(logging.INFO)
+
+    def _empty_callback(self, *args, **kwargs):
+        """空回调函数，不做任何事，用于抑制优化器输出"""
+        pass
 
     def _log_progress(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -94,21 +100,26 @@ class VQEEnergyLabeler:
                          global_idx, batch_idx, batch_inner_idx):
         t0 = time.time()
         
-        # 根据verbose参数设置日志级别
-        if not self.verbose:
-            vqe_logger = logging.getLogger('qiskit.algorithms.minimum_eigensolvers.vqe')
-            optimizer_logger = logging.getLogger('qiskit.algorithms.optimizers')
-            primitives_logger = logging.getLogger('qiskit.primitives')
-            
-            # 记住原始日志级别
-            original_vqe_level = vqe_logger.level
-            original_optimizer_level = optimizer_logger.level
-            original_primitives_level = primitives_logger.level
-            
-            # 设置为ERROR级别以抑制大多数消息
-            vqe_logger.setLevel(logging.ERROR)
-            optimizer_logger.setLevel(logging.ERROR)
-            primitives_logger.setLevel(logging.ERROR)
+        # 无论verbose设置如何，都强制抑制VQE优化器的输出
+        vqe_logger = logging.getLogger('qiskit.algorithms.minimum_eigensolvers.vqe')
+        optimizer_logger = logging.getLogger('qiskit.algorithms.optimizers')
+        primitives_logger = logging.getLogger('qiskit.primitives')
+        algorithms_logger = logging.getLogger('qiskit.algorithms')
+        qiskit_logger = logging.getLogger('qiskit')
+        
+        # 记住原始日志级别
+        original_vqe_level = vqe_logger.level
+        original_optimizer_level = optimizer_logger.level
+        original_primitives_level = primitives_logger.level
+        original_algorithms_level = algorithms_logger.level
+        original_qiskit_level = qiskit_logger.level
+        
+        # 设置为CRITICAL级别以完全抑制所有输出
+        vqe_logger.setLevel(logging.CRITICAL)
+        optimizer_logger.setLevel(logging.CRITICAL)
+        primitives_logger.setLevel(logging.CRITICAL)
+        algorithms_logger.setLevel(logging.CRITICAL)
+        qiskit_logger.setLevel(logging.ERROR)
 
         try:
             # --- 0. 标准化 circuit 对象 ---
@@ -121,25 +132,14 @@ class VQEEnergyLabeler:
 
             # --- 1. 重复 n_repeat 次 ---
             for repeat_idx in range(self.n_repeat):
-                # 在详细模式和非详细模式下的处理方式
-                if not self.verbose:
-                    # 抑制标准输出
-                    with redirect_stdout(io.StringIO()):
-                        # 运行VQE
-                        vqe = VQE(estimator=self.estimator,
-                                ansatz=circuit,
-                                optimizer=self.optimizer,
-                                callback=None)  # 禁用回调以减少输出
-                        result = vqe.compute_minimum_eigenvalue(hamiltonian)
-                else:
-                    # 正常输出模式
+                # 始终使用重定向stdout，即使在verbose模式下
+                with redirect_stdout(io.StringIO()):
+                    # 运行VQE
                     vqe = VQE(estimator=self.estimator,
                             ansatz=circuit,
-                            optimizer=self.optimizer)
-                    # 增加详细输出
-                    print(f"\n--- 开始运行 VQE (重复 {repeat_idx+1}/{self.n_repeat}) ---")
+                            optimizer=self.optimizer,
+                            callback=self._empty_callback)  # 使用空回调函数
                     result = vqe.compute_minimum_eigenvalue(hamiltonian)
-                    print(f"--- VQE 运行完成 ---\n")
                 
                 # 从结果中提取能量值
                 e = result.eigenvalue.real
@@ -154,20 +154,20 @@ class VQEEnergyLabeler:
                 optimal_params_list.append(optimal_parameters)
                 cost_evals_list.append(cost_function_evals)
                 
-                # 打印能量值和详细信息（如果启用了详细输出）
+                # 如果启用了详细输出，只打印我们需要的信息
                 if self.verbose:
                     print(f"计算结果: 能量 = {e}")
                     print(f"函数评估次数: {cost_function_evals}")
                 
                 # 1-B Expressibility (仅在启用时计算)
                 if self.calculate_expressibility:
-                    with redirect_stdout(io.StringIO()) if not self.verbose else redirect_stdout(None):
+                    with redirect_stdout(io.StringIO()):
                         expr = expressibility(
                             qubits=self.expr_qubits or circuit.num_qubits,
                             circuit=circuit,
                             bins=self.expr_bins,
                             samples=self.expr_samples,
-                            show_progress=self.verbose)
+                            show_progress=False)
                     exprs.append(expr)
                     if self.verbose:
                         print(f"表达性: {expr}")
@@ -200,10 +200,11 @@ class VQEEnergyLabeler:
             cost_evals_list = []
         finally:
             # 恢复原始日志级别
-            if not self.verbose:
-                vqe_logger.setLevel(original_vqe_level)
-                optimizer_logger.setLevel(original_optimizer_level)
-                primitives_logger.setLevel(original_primitives_level)
+            vqe_logger.setLevel(original_vqe_level)
+            optimizer_logger.setLevel(original_optimizer_level)
+            primitives_logger.setLevel(original_primitives_level)
+            algorithms_logger.setLevel(original_algorithms_level)
+            qiskit_logger.setLevel(original_qiskit_level)
 
         t1 = time.time()
 
@@ -274,25 +275,26 @@ class VQEEnergyLabeler:
                     res = future.result()
                     batch_results.append(res)
 
-                # 批次完成后批量写入日志文件
+                # 批次完成后批量写入日志文件，简化输出格式
                 with open(self.log_file, 'a') as f_log:
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     for result in batch_results:
                         if result["status"] == "success":
-                            # 记录更多能量相关信息
-                            energy_info = f"Optimal Value: {result['optimal_value']:.6f}"
-                            if len(result.get('all_energies', [])) > 1:
-                                energy_info += f", Energy Range: [{min(result['all_energies']):.6f} to {max(result['all_energies']):.6f}]"
+                            # 简化能量信息，只输出需要的信息
+                            energy_info = f"Energy: {result['optimal_value']:.6f}"
                             
+                            # 表达性信息（如果有）
                             expr_str = f", Expr: {result['expressibility']:.6f}" if result['expressibility'] is not None else ""
+                            
+                            # 简化日志格式
                             f_log.write(f"{timestamp} - Batch {result['batch_index']}, "
-                                      f"Global {result['global_index']}, Inner {result['batch_inner_index']}: "
-                                      f"{energy_info}, Status: success{expr_str}, "
+                                      f"Circuit {result['global_index']}: "
+                                      f"{energy_info}{expr_str}, "
                                       f"Time: {result['time_taken']:.4f}s\n")
                         else:
                             f_log.write(f"{timestamp} - Batch {result['batch_index']}, "
-                                      f"Global {result['global_index']}, Inner {result['batch_inner_index']}: "
-                                      f"Status: error, Error: {result.get('error_message', 'Unknown')}, "
+                                      f"Circuit {result['global_index']}: "
+                                      f"Status: error, "
                                       f"Time: {result['time_taken']:.4f}s\n")
 
                 # 保存当前批次结果到单独文件
